@@ -1,6 +1,6 @@
 import requests
 from bs4 import BeautifulSoup, Comment
-import csv
+import json 
 import re
 from urllib.parse import urlparse, parse_qs, unquote
 import time
@@ -45,26 +45,10 @@ def backoff_request(func, *args, retries=3, base_delay=1, max_delay=16, **kwargs
         except requests.RequestException as e:
             print(f"Attempt {attempt + 1}/{retries} failed: {e}")
             random_delay(base_delay, min(base_delay * 2 ** attempt, max_delay))
-    return None  # Return None if all attempts fail
+    return None
 
-# (Existing website checks unchanged...)
-
-def check_website(url):
-    if not url:
-        return 'Error'
-    try:
-        response = backoff_request(session.get, url, timeout=5)
-        if response is None:
-            return 'Error'
-        soup = BeautifulSoup(response.text, 'html.parser')
-        headers = response.headers
-
-        # (Existing checks unchanged...)
-
-        return 'Unknown'
-    except requests.exceptions.RequestException as e:
-        print(f"Error accessing {url}: {e}")
-        return 'Error'
+def make_request_with_session(session, method, url, **kwargs):
+    return session.request(method, url, **kwargs)
 
 def is_squarespace(soup):
     comments = soup.find_all(string=lambda text: isinstance(text, Comment))
@@ -123,8 +107,9 @@ def check_website(url):
     if not url:
         return 'Error'
     try:
-        response = requests.get(url, headers=headers_with_agent, timeout=5)
-        response.raise_for_status()
+        response = backoff_request(make_request_with_session, session, "GET", url, timeout=5)
+        if response is None:
+            return 'Error'
         soup = BeautifulSoup(response.text, 'html.parser')
         headers = response.headers
 
@@ -151,6 +136,7 @@ def check_website(url):
         print(f"General request error for {url}: {e}")
         return 'Error'
 
+
 def get_businesses(location, radius):
     print(f"Fetching businesses for location: {location}")
     url = "https://api.yelp.com/v3/businesses/search"
@@ -161,12 +147,15 @@ def get_businesses(location, radius):
         "term": "business",
         "location": location,
         "radius": min(radius, 40000),
-        "limit": 50
+        "limit": 10 
     }
-    response = requests.get(url, headers=headers, params=params)
-    print(f"Yelp API response status code: {response.status_code}")
-    if response.status_code == 200:
+    
+    response = backoff_request(make_request_with_session, session, "GET", url, headers=headers, params=params)
+    
+    if response and response.status_code == 200:
+        print(f"Yelp API response status code: {response.status_code}")
         return response.json().get('businesses', [])
+    print("Failed to retrieve businesses after retries.")
     return []
 
 def extract_yelp_url(yelp_url):
@@ -214,62 +203,101 @@ def extract_website(driver):
 
     return ''
 
-
 # Main program
 location = 'St. Louis, MO'
 radius = 40000  # 25 miles in meters
 businesses = get_businesses(location, radius)
 print(f"Number of businesses found: {len(businesses)}")
 
-# Open files for writing
-with open('businesses.csv', mode='w', newline='') as file, \
-     open('unknowns.csv', mode='w', newline='') as unknown_file:
-    
-    writer = csv.writer(file)
-    writer.writerow(['Business Name', 'Email', 'Phone', 'Website', 'Type', 'Location'])
+# Initialize the Selenium WebDriver
+driver = init_webdriver()
 
-    unknown_writer = csv.writer(unknown_file)
-    unknown_writer.writerow(['Business Name', 'Email', 'Phone', 'Website', 'Location'])
+# Placeholders for business data to be saved in JSON format
+business_data = []
+unknown_business_data = []
+not_founds_data = []
 
-    # Initialize the Selenium WebDriver
-    driver = init_webdriver()
 
-    for business in businesses:
-        name = business.get('name', '')
-        phone = business.get('phone', '')
-        yelp_url = business.get('url', '')
-        address = ", ".join(business.get('location', {}).get('display_address', []))
 
-        if yelp_url:
-            print(f"Checking Yelp page: {yelp_url}")
-            try:
-                driver.get(yelp_url)
-                time.sleep(2)  # Optional: wait for additional content to load
-                
-                # Use the new website extraction logic
-                website_url = extract_website(driver)
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 
-                if website_url:
-                    site_type = check_website(website_url)
-                    email = ''
-                    try:
-                        website_response = requests.get(website_url, headers=headers_with_agent, timeout=5)
+# Assuming `extract_website` and `check_website` are defined elsewhere
+
+for business in businesses:
+    name = business.get('name', '')
+    phone = business.get('phone', '')
+    yelp_url = business.get('url', '')
+    address = ", ".join(business.get('location', {}).get('display_address', []))
+
+    business_info = {
+        "Business Name": name,
+        "Email": "",
+        "Phone": phone,
+        "Website": "",
+        "Type": "Unknown",
+        "Location": address
+    }
+
+    if yelp_url:
+        print(f"Checking Yelp page: {yelp_url}")
+        try:
+            driver.get(yelp_url)
+            
+            # Wait until the element indicating page load is present (adjust selector as needed)
+            WebDriverWait(driver, 10).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, "body"))  # Placeholder selector
+            )
+
+            # Extract website URL
+            website_url = extract_website(driver)
+
+            if website_url:
+                site_type = check_website(website_url)
+                email = ''
+
+                try:
+                    # Request website content with backoff
+                    website_response = backoff_request(make_request_with_session, session, 'GET', website_url, headers=headers_with_agent, timeout=5, retries=3, base_delay=1, max_delay=8)
+                    if website_response:
                         website_soup = BeautifulSoup(website_response.text, 'html.parser')
-                        email = extract_email(website_soup)
-                    except requests.exceptions.RequestException:
-                        print(f"Error accessing {website_url} for email extraction.")
+                        email = extract_email(website_soup) if website_soup else ''
+                except requests.exceptions.RequestException as req_err:
+                    print(f"Error accessing {website_url} for email extraction: {req_err}")
 
-                    if site_type == 'Unknown':
-                        unknown_writer.writerow([name, email, phone, website_url, address])
-                        print(f"{website_url} is an Unknown site. Writing to unknowns.csv.")
-                    else:
-                        writer.writerow([name, email, phone, website_url, site_type, address])
-                        print(f"{website_url} is a {site_type} site.")
+                # Update business info
+                business_info.update({
+                    "Email": email,
+                    "Website": website_url,
+                    "Type": site_type
+                })
+
+                # Append data based on site type
+                if site_type == 'Unknown':
+                    unknown_business_data.append(business_info)
+                    print(f"Added {website_url} as 'Unknown' to unknowns.json.")
                 else:
-                    print(f"No website found for {name}. Writing partial info to CSV.")
-                    writer.writerow([name, '', phone, '', 'Unknown', address])
-            except Exception as e:
-                print(f"Failed to process {yelp_url}: {e}")
-    
-    # Close the WebDriver
-    driver.quit()
+                    business_data.append(business_info)
+                    print(f"Added {website_url} as '{site_type}' site to business data.")
+            else:
+                # No website found
+                print(f"No website found for {name}. Adding to not-founds.json.")
+                not_founds_data.append(business_info)
+        except Exception as e:
+            print(f"Failed to process {yelp_url}: {e}")
+
+# Close the WebDriver
+driver.quit()
+
+# Write the collected data to JSON files
+with open('businesses.json', 'w') as business_file:
+    json.dump(business_data, business_file, indent=4)
+
+with open('unknowns.json', 'w') as unknown_file:
+    json.dump(unknown_business_data, unknown_file, indent=4)
+
+with open('not-founds.json', 'w') as not_founds_file:
+    json.dump(not_founds_data, not_founds_file, indent=4)
+
+print("Data has been successfully saved to businesses.json, unknowns.json, and not-founds.json.")
