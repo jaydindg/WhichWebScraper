@@ -141,7 +141,7 @@ def get_businesses(location, radius):
     print(f"Fetching businesses for location: {location}")
     url = "https://api.yelp.com/v3/businesses/search"
     headers = {
-        "Authorization": "Bearer WfINueq9VYVrwz0hmtuoRY6L-EMRxCjVh9jFy31adPovm6Sg8_uRwwA6JncBB2dpziY7_ESMnc6_IyyRdgvrY1gNtRIfSzXScNev8pRW0cUobycQxZgNE9c2uEInZ3Yx"
+        "Authorization": "Bearer RK8tJneU4qiuAN5FGuAeOgvsH-qKc_NaMM2niJWwkkZmCpU9odnsKuIWrWg-nPg-G8cp6Tu17dp1zruXQSMvD9hqeS3DLLwqQd1TZEIiNnKA920K1l89I-PLSnrPZ3Yx"
     }
     params = {
         "term": "business",
@@ -205,7 +205,7 @@ def extract_website(driver):
 
 # Main program
 location = 'St. Louis, MO'
-radius = 40000  # 25 miles in meters
+radius = 30000  # 25 miles in meters
 businesses = get_businesses(location, radius)
 print(f"Number of businesses found: {len(businesses)}")
 
