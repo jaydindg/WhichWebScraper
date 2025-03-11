@@ -141,7 +141,7 @@ def get_businesses(location, radius):
     print(f"Fetching businesses for location: {location}")
     url = "https://api.yelp.com/v3/businesses/search"
     headers = {
-        "Authorization": "Bearer RK8tJneU4qiuAN5FGuAeOgvsH-qKc_NaMM2niJWwkkZmCpU9odnsKuIWrWg-nPg-G8cp6Tu17dp1zruXQSMvD9hqeS3DLLwqQd1TZEIiNnKA920K1l89I-PLSnrPZ3Yx"
+        "Authorization": "Bearer Ez4Aet89WAR7kmhTtxkMDlpTnLyE29LPjODkXPVPC6KWbL_Ul1wLn3kZj1hsJvHAl1ZIpkZRcyoxHv9WpzqtBt6WR9__R6u0hmb31Y0ElC4T9mxLrJymAsJ_R33PZ3Yx"
     }
     params = {
         "term": "business",
@@ -152,11 +152,23 @@ def get_businesses(location, radius):
     
     response = backoff_request(make_request_with_session, session, "GET", url, headers=headers, params=params)
     
-    if response and response.status_code == 200:
+    if response:
         print(f"Yelp API response status code: {response.status_code}")
-        return response.json().get('businesses', [])
-    print("Failed to retrieve businesses after retries.")
+        print(f"Response text: {response.text}")  # Print full response for debugging
+        
+        if response.status_code == 200:
+            return response.json().get('businesses', [])
+        elif response.status_code == 403:
+            print("Invalid API key or authentication issue.")
+        elif response.status_code == 400:
+            print("Bad request. Check parameters (location, radius, etc.).")
+        elif response.status_code == 429:
+            print("Rate limit exceeded. Try again later.")
+        else:
+            print(f"Unexpected error: {response.status_code} - {response.text}")
+    
     return []
+
 
 def extract_yelp_url(yelp_url):
     parsed_url = urlparse(yelp_url)
